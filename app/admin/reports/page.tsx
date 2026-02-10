@@ -58,7 +58,8 @@ interface FarmerCollection {
   state?: { state_name: string };
   district?: { district_name: string };
   mandal?: { mandal_name: string };
-  village?: { name: string };
+  village?: string | null;
+  // village?: { name: string };
   social_media?: string;
   collected_by?: {
     name: string;
