@@ -88,8 +88,6 @@ export default function Reports() {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>("all") // "all" or specific employee ID
   const [allEmployeesList, setAllEmployeesList] = useState<UserInfo[]>([]) // Added state for all employees
   const [employeeDropdownUnderManagerTouched, setEmployeeDropdownUnderManagerTouched] = useState(false); // State for dropdown interaction
-  const [collectedUsersList, setCollectedUsersList] = useState<UserInfo[]>([])
-  const [selectedCollectedUserId, setSelectedCollectedUserId] = useState<string>("all")
 
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([])
   const [farmerCollections, setFarmerCollections] = useState<FarmerCollection[]>([])
@@ -140,7 +138,7 @@ export default function Reports() {
       fetchFarmerCollections()
     }
     // Add selectedManagerId and selectedEmployeeId to dependencies
-  }, [fromDate, toDate, userType, activeTab, selectedManagerId, selectedEmployeeId, selectedCollectedUserId])
+  }, [fromDate, toDate, userType, activeTab, selectedManagerId, selectedEmployeeId])
 
   // Reset pagination on major filter changes or tab switch
   useEffect(() => { setAttendancePage(0) }, [fromDate, toDate, userType, selectedManagerId, selectedEmployeeId])
@@ -206,22 +204,6 @@ export default function Reports() {
     setIsLoading(false); // End loading
   };
 
-  const fetchCollectedUsers = async () => {
-    const { data, error } = await supabase
-      .from('users')
-      .select('id, name')
-      .in('role', ['employee', 'manager'])
-      .order('name');
-    if (!error) {
-      setCollectedUsersList(data || [])
-    }
-  };
-
-  useEffect(() => {
-    if (activeTab === 'farmer') {
-      fetchCollectedUsers();
-    }
-  }, [activeTab]);
 
   const fetchAttendanceRecords = async () => {
     if (!user) return;
@@ -400,8 +382,23 @@ export default function Reports() {
         .lte('created_at', toDate.toISOString());
 
       // Apply filters based on user type and selections - Mirroring attendance logic
-      if (selectedCollectedUserId !== "all") {
-        query = query.eq('collected_by', selectedCollectedUserId);
+      if (userType === "manager") {
+        if (selectedManagerId !== "all") {
+            if (selectedEmployeeId === "") {
+                query = query.eq('collected_by.id', selectedManagerId);
+            } else if (selectedEmployeeId === "all") {
+                query = query.or(`id.eq.${selectedManagerId},and(manager_id.eq.${selectedManagerId},role.eq.employee)`, { referencedTable: 'collected_by' });
+            } else {
+                query = query.eq('collected_by.id', selectedEmployeeId);
+            }
+        } else {
+          query = query.eq('collected_by.role', 'manager');
+        }
+      } else if (userType === "employee") {
+        query = query.eq('collected_by.role', 'employee');
+        if (selectedEmployeeId !== "all") {
+          query = query.eq('collected_by.id', selectedEmployeeId);
+        }
       }
       // No specific role filter if userType is "all"
 
@@ -458,7 +455,6 @@ export default function Reports() {
     setToDate(new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999)));
     // Reset User Type (this will trigger useEffects to reset manager/employee lists/selections)
     setUserType("all");
-    setSelectedCollectedUserId("all");
   };
 
   const exportAttendanceToCSV = () => {
@@ -857,21 +853,82 @@ export default function Reports() {
                     />
                   </div>
                   <div className="flex items-center gap-1">
-                    <label htmlFor="collectedBy" className="text-sm font-medium">Collected By:</label>
-                    <Select value={selectedCollectedUserId} onValueChange={setSelectedCollectedUserId}>
-                      <SelectTrigger id="collectedBy" className="w-[200px] focus:outline-none focus:ring-0">
-                        <SelectValue placeholder="Select user" />
+                    <label htmlFor="farmerUserType" className="text-sm font-medium">User Type:</label>
+                    <Select value={userType} onValueChange={(value: "all" | "employee" | "manager") => setUserType(value)}>
+                      <SelectTrigger id="farmerUserType" className="w-[130px] focus:outline-none focus:ring-0">
+                        <SelectValue placeholder="Select user type" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">All Users</SelectItem>
-                        {collectedUsersList.map(user => (
-                          <SelectItem key={user.id} value={user.id}>
-                            {user.name}
-                          </SelectItem>
-                        ))}
+                        <SelectItem value="employee">Employee</SelectItem>
+                        <SelectItem value="manager">Manager</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {userType === 'manager' && (
+                    <div className="flex items-center gap-1">
+                      <label htmlFor="farmerManagerSelect" className="text-sm font-medium">Manager:</label>
+                      <Select value={selectedManagerId} onValueChange={setSelectedManagerId}>
+                        <SelectTrigger id="farmerManagerSelect" className="w-[130px] focus:outline-none focus:ring-0">
+                          <SelectValue placeholder="Select Manager" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Managers</SelectItem>
+                          {managersList.map(manager => (
+                            <SelectItem key={manager.id} value={manager.id}>
+                              {manager.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {userType === 'manager' && selectedManagerId !== 'all' && (
+                    <div className="flex items-center gap-1">
+                      <label htmlFor="farmerEmployeeSelectManager" className="text-sm font-medium">Employee:</label>
+                      <Select 
+                        value={employeeDropdownUnderManagerTouched ? selectedEmployeeId : ""} 
+                        onValueChange={(value) => { 
+                          setEmployeeDropdownUnderManagerTouched(true);
+                          setSelectedEmployeeId(value);
+                        }}
+                      >
+                        <SelectTrigger id="farmerEmployeeSelectManager" className="w-[130px] focus:outline-none focus:ring-0">
+                          <SelectValue placeholder="Select Employee" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Employees</SelectItem>
+                          {employeesList.map(employee => (
+                            <SelectItem key={employee.id} value={employee.id}>
+                              {employee.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {userType === 'employee' && (
+                    <div className="flex items-center gap-1">
+                      <label htmlFor="farmerEmployeeSelectAll" className="text-sm font-medium">Employee:</label>
+                      <Select value={selectedEmployeeId} onValueChange={setSelectedEmployeeId}>
+                        <SelectTrigger id="farmerEmployeeSelectAll" className="w-[130px] focus:outline-none focus:ring-0">
+                          <SelectValue placeholder="Select Employee" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Employees</SelectItem>
+                          {allEmployeesList.map(employee => (
+                            <SelectItem key={employee.id} value={employee.id}>
+                              {employee.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button onClick={clearFilters} variant="ghost" size="icon" className="">
