@@ -367,7 +367,7 @@ export default function Reports() {
           state:states(state_name),
           district:districts(district_name),
           mandal:mandals(mandal_name),
-          village:villages(name),
+          village,
           social_media,
           collected_by:users!inner(
             id,
