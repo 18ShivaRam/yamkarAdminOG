@@ -88,6 +88,8 @@ export default function Reports() {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>("all") // "all" or specific employee ID
   const [allEmployeesList, setAllEmployeesList] = useState<UserInfo[]>([]) // Added state for all employees
   const [employeeDropdownUnderManagerTouched, setEmployeeDropdownUnderManagerTouched] = useState(false); // State for dropdown interaction
+  const [collectedUsersList, setCollectedUsersList] = useState<UserInfo[]>([])
+  const [selectedCollectedUserId, setSelectedCollectedUserId] = useState<string>("all")
 
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([])
   const [farmerCollections, setFarmerCollections] = useState<FarmerCollection[]>([])
@@ -138,7 +140,7 @@ export default function Reports() {
       fetchFarmerCollections()
     }
     // Add selectedManagerId and selectedEmployeeId to dependencies
-  }, [fromDate, toDate, userType, activeTab, selectedManagerId, selectedEmployeeId])
+  }, [fromDate, toDate, userType, activeTab, selectedManagerId, selectedEmployeeId, selectedCollectedUserId])
 
   // Reset pagination on major filter changes or tab switch
   useEffect(() => { setAttendancePage(0) }, [fromDate, toDate, userType, selectedManagerId, selectedEmployeeId])
@@ -203,6 +205,23 @@ export default function Reports() {
     setSelectedEmployeeId(""); // Reset employee selection to empty string
     setIsLoading(false); // End loading
   };
+
+  const fetchCollectedUsers = async () => {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, name')
+      .in('role', ['employee', 'manager'])
+      .order('name');
+    if (!error) {
+      setCollectedUsersList(data || [])
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'farmer') {
+      fetchCollectedUsers();
+    }
+  }, [activeTab]);
 
   const fetchAttendanceRecords = async () => {
     if (!user) return;
@@ -381,32 +400,8 @@ export default function Reports() {
         .lte('created_at', toDate.toISOString());
 
       // Apply filters based on user type and selections - Mirroring attendance logic
-      if (userType === "manager") {
-        if (selectedManagerId !== "all") {
-            // A specific manager is selected
-            if (selectedEmployeeId === "") {
-                // Initial state: No employee selected yet, fetch only the manager's collections
-                query = query.eq('collected_by.id', selectedManagerId);
-            } else if (selectedEmployeeId === "all") {
-                // "All Employees" explicitly selected under the specific manager
-                // Fetch the manager's collections OR their employees' collections
-                query = query.or(`id.eq.${selectedManagerId},and(manager_id.eq.${selectedManagerId},role.eq.employee)`, { referencedTable: 'collected_by' });
-            } else {
-                // A specific employee under that manager is selected
-                // Fetch only that specific employee's collections
-                query = query.eq('collected_by.id', selectedEmployeeId);
-            }
-        } else {
-          // "All Managers" is selected: Filter for collections by users with the role 'manager'
-          query = query.eq('collected_by.role', 'manager');
-        }
-      } else if (userType === "employee") {
-        // Filter for collections by users with the role 'employee' (when UserType=Employee)
-        query = query.eq('collected_by.role', 'employee');
-        // If a specific employee is selected from the 'All Employees' list
-        if (selectedEmployeeId !== "all") {
-          query = query.eq('collected_by.id', selectedEmployeeId);
-        }
+      if (selectedCollectedUserId !== "all") {
+        query = query.eq('collected_by', selectedCollectedUserId);
       }
       // No specific role filter if userType is "all"
 
@@ -463,6 +458,7 @@ export default function Reports() {
     setToDate(new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999)));
     // Reset User Type (this will trigger useEffects to reset manager/employee lists/selections)
     setUserType("all");
+    setSelectedCollectedUserId("all");
   };
 
   const exportAttendanceToCSV = () => {
@@ -571,7 +567,7 @@ export default function Reports() {
       "State": collection.state?.state_name || "N/A",
       "District": collection.district?.district_name || "N/A",
       "Mandal": collection.mandal?.mandal_name || "N/A",
-      "Village": collection.village?.name || "N/A",
+      "Village": collection.village || "N/A",
       "Social Media": collection.social_media || "N/A",
       "Collected By": collection.collected_by?.name || "N/A",
       "Collector Cadre": collection.collected_by?.cadre?.name || "N/A",
@@ -839,6 +835,64 @@ export default function Reports() {
           <TabsContent value="farmer">
             <Card>
               <CardContent className="p-4 space-y-4">
+                <div className="flex flex-wrap items-center gap-1">
+                  <div className="flex items-center gap-1">
+                    <label htmlFor="farmerFromDate" className="text-sm font-medium">From:</label>
+                    <Input
+                      id="farmerFromDate"
+                      type="date"
+                      value={format(fromDate, 'yyyy-MM-dd')}
+                      onChange={(e) => setFromDate(new Date(e.target.value + 'T00:00:00Z'))}
+                      className="w-auto"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <label htmlFor="farmerToDate" className="text-sm font-medium">To:</label>
+                    <Input
+                      id="farmerToDate"
+                      type="date"
+                      value={format(toDate, 'yyyy-MM-dd')}
+                      onChange={(e) => setToDate(new Date(e.target.value + 'T23:59:59Z'))}
+                      className="w-auto"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <label htmlFor="collectedBy" className="text-sm font-medium">Collected By:</label>
+                    <Select value={selectedCollectedUserId} onValueChange={setSelectedCollectedUserId}>
+                      <SelectTrigger id="collectedBy" className="w-[200px] focus:outline-none focus:ring-0">
+                        <SelectValue placeholder="Select user" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Users</SelectItem>
+                        {collectedUsersList.map(user => (
+                          <SelectItem key={user.id} value={user.id}>
+                            {user.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button onClick={clearFilters} variant="ghost" size="icon" className="">
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Clear Filters</p>
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button onClick={exportFarmerCollectionsToCSV} variant="outline" size="icon" className="">
+                        <Download className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Export CSV</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
                 {/* Pagination bar (Gmail style) */}
                 <div className="flex items-center justify-end gap-2">
                   {(() => {
@@ -896,7 +950,7 @@ export default function Reports() {
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.state?.state_name || 'N/A'}</TableCell>
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.district?.district_name || 'N/A'}</TableCell>
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.mandal?.mandal_name || 'N/A'}</TableCell>
-                                <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.village?.name || 'N/A'}</TableCell>
+                                <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.village || 'N/A'}</TableCell>
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.social_media || 'N/A'}</TableCell>
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.collected_by?.name || 'N/A'}</TableCell>
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.collected_by?.cadre?.name || 'N/A'}</TableCell>
