@@ -30,7 +30,9 @@ export default function AdminDashboard() {
       const { count: managerCount, error: managerError } = await supabase
         .from('users')
         .select('*', { count: 'exact', head: true })
-        .eq('role', 'manager');
+        .eq('role', 'manager')
+        .eq('status', 'approved')
+        .eq('is_deleted', false);
 
       if (managerError) throw managerError;
 
@@ -38,7 +40,9 @@ export default function AdminDashboard() {
       const { count: employeeCount, error: employeeError } = await supabase
         .from('users')
         .select('*', { count: 'exact', head: true })
-        .eq('role', 'employee');
+        .eq('role', 'employee')
+        .eq('status', 'approved')
+        .eq('is_deleted', false);
 
       if (employeeError) throw employeeError;
 
@@ -46,7 +50,8 @@ export default function AdminDashboard() {
       const { count: pendingCount, error: pendingError } = await supabase
         .from('users')
         .select('*', { count: 'exact', head: true })
-        .eq('status', 'pending');
+        .eq('status', 'pending')
+        .eq('is_deleted', false);
 
       if (pendingError) throw pendingError;
 
