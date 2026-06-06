@@ -8,10 +8,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { Download, X, ChevronLeft, ChevronRight } from "lucide-react"
+import { Download, X, ChevronLeft, ChevronRight, Loader2 } from "lucide-react"
 import { useAuth } from "@/contexts/auth-context"
 import { supabase } from "@/lib/supabaseClient"
-import { startOfMonth, endOfMonth, format } from "date-fns"
+import { startOfMonth, endOfMonth, format, addMonths, subMonths, eachDayOfInterval, isSameDay } from "date-fns"
+import ExcelJS from "exceljs"
 
 interface UserInfo {
   id: string;
@@ -67,6 +68,30 @@ interface FarmerCollection {
   } | null;
 }
 
+interface SummaryUserInfo {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  manager_id?: string | null;
+  phone?: string | null;
+  cadre?: { name: string } | null;
+}
+
+interface DailyAttendance {
+  date: string;
+  dayOfMonth: number;
+  checkIn: string | null;
+  checkOut: string | null;
+  loginHours: number;
+  attendance: string;
+}
+
+interface UserAttendance {
+  user: SummaryUserInfo;
+  dailyAttendance: DailyAttendance[];
+}
+
 export default function Reports() {
   const { user } = useAuth()
   const [fromDate, setFromDate] = useState<Date>(() => {
@@ -95,7 +120,23 @@ export default function Reports() {
   const [activeTab, setActiveTab] = useState("attendance")
   const [attendancePage, setAttendancePage] = useState(0)
   const [farmerPage, setFarmerPage] = useState(0)
+  const [summaryPage, setSummaryPage] = useState(0)
   const PAGE_SIZE = 50
+
+  // Attendance Summary state
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const today = new Date()
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`
+  })
+  const [summaryUserType, setSummaryUserType] = useState<"employee" | "manager">("employee")
+  const [summaryManagersList, setSummaryManagersList] = useState<SummaryUserInfo[]>([])
+  const [summarySelectedManagerId, setSummarySelectedManagerId] = useState<string>("all")
+  const [summaryEmployeesList, setSummaryEmployeesList] = useState<SummaryUserInfo[]>([])
+  const [summarySelectedEmployeeId, setSummarySelectedEmployeeId] = useState<string>("all")
+  const [summaryAllEmployeesList, setSummaryAllEmployeesList] = useState<SummaryUserInfo[]>([])
+  const [summaryEmployeeDropdownTouched, setSummaryEmployeeDropdownTouched] = useState(false)
+  const [attendanceSummaryData, setAttendanceSummaryData] = useState<UserAttendance[]>([])
+  const [daysInMonth, setDaysInMonth] = useState<string[]>([])
 
   // Fetch active managers or all active employees based on userType
   useEffect(() => {
@@ -144,8 +185,44 @@ export default function Reports() {
   useEffect(() => { setAttendancePage(0) }, [fromDate, toDate, userType, selectedManagerId, selectedEmployeeId])
   useEffect(() => { setFarmerPage(0) }, [fromDate, toDate, userType, selectedManagerId, selectedEmployeeId])
   useEffect(() => {
-    if (activeTab === 'attendance') setAttendancePage(0); else setFarmerPage(0)
+    if (activeTab === 'attendance') setAttendancePage(0); 
+    else if (activeTab === 'farmer') setFarmerPage(0);
+    else setSummaryPage(0)
   }, [activeTab])
+
+  // Reset summary page on filter changes
+  useEffect(() => {
+    setSummaryPage(0)
+  }, [selectedMonth, summaryUserType, summarySelectedManagerId, summarySelectedEmployeeId])
+
+  // Attendance Summary useEffects
+  useEffect(() => {
+    if (summaryUserType === 'manager') {
+      fetchSummaryActiveManagers()
+      setSummarySelectedEmployeeId("all")
+      setSummaryEmployeesList([])
+    } else if (summaryUserType === 'employee') {
+      fetchSummaryAllActiveEmployees()
+      setSummarySelectedManagerId("all")
+      setSummaryManagersList([])
+    }
+  }, [summaryUserType])
+
+  useEffect(() => {
+    if (summaryUserType === 'manager' && summarySelectedManagerId !== "all") {
+      setSummaryEmployeeDropdownTouched(false)
+      fetchSummaryEmployeesForManager(summarySelectedManagerId)
+    } else if (summaryUserType === 'manager') {
+      setSummaryEmployeesList([])
+      setSummarySelectedEmployeeId("all")
+    }
+  }, [summarySelectedManagerId, summaryUserType])
+
+  useEffect(() => {
+    if (activeTab === "summary") {
+      fetchAttendanceSummary()
+    }
+  }, [selectedMonth, summaryUserType, summarySelectedManagerId, summarySelectedEmployeeId, activeTab])
 
   const fetchActiveManagers = async () => {
     setIsLoading(true); // Indicate loading
@@ -591,14 +668,308 @@ export default function Reports() {
     document.body.removeChild(link)
   }
 
+  // Attendance Summary functions
+  const fetchSummaryActiveManagers = async () => {
+    setIsLoading(true)
+    const { data, error } = await supabase
+      .from("users")
+      .select("id, name, email, role, manager_id, phone, cadre:cadres(name)")
+      .eq("role", "manager")
+      .eq("status", "approved")
+      .eq("is_deleted", false)
+      .order("name")
+
+    if (error) {
+      console.error("Error fetching managers:", error)
+      setSummaryManagersList([])
+    } else {
+      setSummaryManagersList(data || [])
+    }
+    setIsLoading(false)
+  }
+
+  const fetchSummaryAllActiveEmployees = async () => {
+    setIsLoading(true)
+    const { data, error } = await supabase
+      .from("users")
+      .select("id, name, email, role, manager_id, phone, cadre:cadres(name)")
+      .eq("role", "employee")
+      .eq("status", "approved")
+      .eq("is_deleted", false)
+      .order("name")
+
+    if (error) {
+      console.error("Error fetching employees:", error)
+      setSummaryAllEmployeesList([])
+    } else {
+      setSummaryAllEmployeesList(data || [])
+    }
+    setIsLoading(false)
+  }
+
+  const fetchSummaryEmployeesForManager = async (managerId: string) => {
+    setIsLoading(true)
+    const { data, error } = await supabase
+      .from("users")
+      .select("id, name, email, role, manager_id, phone, cadre:cadres(name)")
+      .eq("role", "employee")
+      .eq("manager_id", managerId)
+      .eq("status", "approved")
+      .eq("is_deleted", false)
+      .order("name")
+
+    if (error) {
+      console.error("Error fetching employees for manager:", error)
+      setSummaryEmployeesList([])
+    } else {
+      setSummaryEmployeesList(data || [])
+    }
+    setIsLoading(false)
+  }
+
+  const fetchAttendanceSummary = async () => {
+    setIsLoading(true)
+    try {
+      // Calculate date range for the selected month
+      const [year, monthNum] = selectedMonth.split("-").map(Number)
+      const monthDate = new Date(year, monthNum - 1, 1)
+      const start = startOfMonth(monthDate)
+      const end = endOfMonth(monthDate)
+      const days = eachDayOfInterval({ start, end })
+      setDaysInMonth(days.map(d => format(d, "yyyy-MM-dd")))
+
+      // Fetch relevant users based on filters
+      let usersQuery = supabase
+        .from("users")
+        .select("id, name, email, role, manager_id, phone, cadre:cadres(name)")
+        .eq("status", "approved")
+        .eq("is_deleted", false)
+
+      if (summaryUserType === "employee") {
+        usersQuery = usersQuery.eq("role", "employee")
+        if (summarySelectedEmployeeId && summarySelectedEmployeeId !== "all") {
+          usersQuery = usersQuery.eq("id", summarySelectedEmployeeId)
+        }
+      } else if (summaryUserType === "manager") {
+        if (summarySelectedManagerId && summarySelectedManagerId !== "all") {
+          if (summarySelectedEmployeeId && summarySelectedEmployeeId !== "all" && summarySelectedEmployeeId !== "") {
+            usersQuery = usersQuery.eq("id", summarySelectedEmployeeId)
+          } else if (summarySelectedEmployeeId === "all") {
+            usersQuery = usersQuery.or(`id.eq.${summarySelectedManagerId},and(manager_id.eq.${summarySelectedManagerId},role.eq.employee)`)
+          } else {
+            usersQuery = usersQuery.eq("id", summarySelectedManagerId)
+          }
+        } else {
+          usersQuery = usersQuery.eq("role", "manager")
+        }
+      }
+
+      const { data: users, error: usersError } = await usersQuery.order("name")
+      if (usersError) throw usersError
+
+      if (!users || users.length === 0) {
+        setAttendanceSummaryData([])
+        return
+      }
+
+      const userIds = users.map(u => u.id)
+
+      // Fetch attendance logs
+      const { data: logs, error: logsError } = await supabase
+        .from("attendance_logs")
+        .select("id, user_id, check_in, check_out")
+        .in("user_id", userIds)
+        .gte("check_in", start.toISOString())
+        .lte("check_in", end.toISOString())
+        .order("check_in", { ascending: true })
+
+      if (logsError) throw logsError
+
+      // Process data
+      const result = users.map(u => {
+        const userLogs = (logs || []).filter(log => log.user_id === u.id)
+
+        const dailyAttendance = days.map(day => {
+          const dayLogs = userLogs.filter(log => isSameDay(new Date(log.check_in), day))
+
+          let checkIn: string | null = null
+          let checkOut: string | null = null
+          let loginHours: number = 0
+          let attendance: string = "Absent"
+
+          if (dayLogs.length > 0) {
+            const sortedByCheckIn = [...dayLogs].sort((a, b) =>
+              new Date(a.check_in).getTime() - new Date(b.check_in).getTime()
+            )
+            checkIn = sortedByCheckIn[0].check_in
+
+            const checkOutLogs = dayLogs.filter(log => log.check_out !== null)
+            if (checkOutLogs.length > 0) {
+              const sortedByCheckOut = [...checkOutLogs].sort((a, b) =>
+                new Date(b.check_out!).getTime() - new Date(a.check_out!).getTime()
+              )
+              checkOut = sortedByCheckOut[0].check_out
+
+              // Calculate login hours
+              const checkInDate = new Date(checkIn)
+              const checkOutDate = new Date(checkOut)
+              const diffMs = checkOutDate.getTime() - checkInDate.getTime()
+              loginHours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100 // 2 decimal places
+
+              // Determine attendance status
+              attendance = loginHours >= 9 ? "Present" : "Absent"
+            } else {
+              // No check out, login hours 0, attendance absent
+              loginHours = 0
+              attendance = "Absent"
+            }
+          }
+
+          return {
+            date: format(day, "yyyy-MM-dd"),
+            dayOfMonth: day.getDate(),
+            checkIn,
+            checkOut,
+            loginHours,
+            attendance
+          }
+        })
+
+        return { user: u, dailyAttendance }
+      })
+
+      setAttendanceSummaryData(result)
+    } catch (err) {
+      console.error("Error fetching attendance summary:", err)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const exportSummaryToExcel = async () => {
+    if (attendanceSummaryData.length === 0 || daysInMonth.length === 0) return
+
+    const workbook = new ExcelJS.Workbook()
+    const worksheet = workbook.addWorksheet("Attendance Summary")
+
+    // Build headers: Sl. No., Name, Email, Phone, Role, Cadre, then each date, then No. of Present, No. of Absent
+    const headerRow = worksheet.addRow([
+      "Sl. No.",
+      "Employee Name",
+      "Email",
+      "Phone",
+      "Role",
+      "Cadre",
+      ...daysInMonth.map(date => {
+        const d = new Date(date)
+        return `${format(d, "dd-MMM")}\n${format(d, "EEE")}`
+      }),
+      "No. of Present",
+      "No. of Absent"
+    ])
+
+    // Style header row
+    headerRow.eachCell(cell => {
+      cell.font = { bold: true, size: 11 }
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFD3D3D3" }
+      }
+      cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true }
+    })
+    headerRow.height = 30
+
+    // Fill data rows
+    attendanceSummaryData.forEach((item, index) => {
+      const presentCount = item.dailyAttendance.filter(day => day.attendance === "Present").length
+      const absentCount = item.dailyAttendance.filter(day => day.attendance === "Absent").length
+
+      const rowData: any[] = [
+        index + 1,
+        item.user.name,
+        item.user.email,
+        item.user.phone || "-",
+        item.user.role,
+        item.user.cadre?.name || "-"
+      ]
+
+      item.dailyAttendance.forEach(day => {
+        let cellValue = ""
+        if (day.checkIn) {
+          cellValue += `In: ${format(new Date(day.checkIn), "hh:mm a")}\n`
+          if (day.checkOut) {
+            cellValue += `Out: ${format(new Date(day.checkOut), "hh:mm a")}\n`
+          } else {
+            cellValue += "Out: Not Checked Out\n"
+          }
+          cellValue += `Hours: ${day.loginHours.toFixed(2)}\n`
+          cellValue += day.attendance
+        } else {
+          cellValue = "In: -\nOut: -\nHours: 0.00\nAbsent"
+        }
+        rowData.push(cellValue)
+      })
+
+      rowData.push(presentCount)
+      rowData.push(absentCount)
+
+      const row = worksheet.addRow(rowData)
+      row.height = 80
+      row.alignment = { vertical: "middle", horizontal: "center", wrapText: true }
+
+      // Highlight present day cells
+      item.dailyAttendance.forEach((day, dayIndex) => {
+        if (day.attendance === "Present") {
+          const cell = row.getCell(7 + dayIndex)
+          cell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: "FFD5F5E3" }
+          }
+        }
+      })
+    })
+
+    // Set column widths
+    worksheet.getColumn(1).width = 8 // Sl. No.
+    worksheet.getColumn(2).width = 20 // Employee Name
+    worksheet.getColumn(3).width = 25 // Email
+    worksheet.getColumn(4).width = 15 // Phone
+    worksheet.getColumn(5).width = 12 // Role
+    worksheet.getColumn(6).width = 15 // Cadre
+    for (let i = 7; i <= 6 + daysInMonth.length; i++) {
+      worksheet.getColumn(i).width = 18
+    }
+    worksheet.getColumn(7 + daysInMonth.length).width = 15 // No. of Present
+    worksheet.getColumn(8 + daysInMonth.length).width = 15 // No. of Absent
+
+    // Download file
+    const buffer = await workbook.xlsx.writeBuffer()
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = `attendance-summary-${selectedMonth}.xlsx`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // Format time helper
+  const formatSummaryTime = (timeStr: string | null) => {
+    if (!timeStr) return ""
+    return format(new Date(timeStr), "hh:mm a")
+  }
+
   return (
     <TooltipProvider>
       <div className="p-4 md:p-6 space-y-6">
         <h1 className="text-2xl font-bold">Reports</h1>
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-2 md:w-[400px]">
+          <TabsList className="grid w-full grid-cols-3 md:w-[600px]">
             <TabsTrigger value="attendance">Attendance Report</TabsTrigger>
             <TabsTrigger value="farmer">Farmer Collection Report</TabsTrigger>
+            <TabsTrigger value="summary">Attendance Summary</TabsTrigger>
           </TabsList>
           <TabsContent value="attendance">
             <Card>
@@ -757,6 +1128,7 @@ export default function Reports() {
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          <TableHead className="whitespace-nowrap text-xs md:text-sm font-medium">Sl. No.</TableHead>
                           <TableHead className="whitespace-nowrap text-xs md:text-sm font-medium">Employee Name</TableHead>
                           <TableHead className="whitespace-nowrap text-xs md:text-sm font-medium">Email</TableHead>
                           <TableHead className="whitespace-nowrap text-xs md:text-sm font-medium">Phone</TableHead>
@@ -783,8 +1155,9 @@ export default function Reports() {
                         {attendanceRecords.length > 0 ? (
                           attendanceRecords
                             .slice(attendancePage * PAGE_SIZE, (attendancePage + 1) * PAGE_SIZE)
-                            .map((record) => (
+                            .map((record, index) => (
                             <TableRow key={record.id}>
+                              <TableCell className="whitespace-nowrap text-xs md:text-sm">{attendancePage * PAGE_SIZE + index + 1}</TableCell>
                               <TableCell className="whitespace-nowrap text-xs md:text-sm">{record.user?.name || 'N/A'}</TableCell>
                               <TableCell className="whitespace-nowrap text-xs md:text-sm">{record.user?.email || 'N/A'}</TableCell>
                               <TableCell className="whitespace-nowrap text-xs md:text-sm">{record.user?.phone || 'N/A'}</TableCell>
@@ -817,7 +1190,7 @@ export default function Reports() {
                           ))
                         ) : (
                           <TableRow>
-                            <TableCell colSpan={20} className="text-center">No attendance records found for the selected criteria.</TableCell>
+                            <TableCell colSpan={21} className="text-center">No attendance records found for the selected criteria.</TableCell>
                           </TableRow>
                         )}
                       </TableBody>
@@ -977,6 +1350,7 @@ export default function Reports() {
                     <Table>
                       <TableHeader>
                         <TableRow>
+                          <TableHead className="whitespace-nowrap text-xs md:text-sm font-medium">Sl. No.</TableHead>
                           <TableHead className="whitespace-nowrap text-xs md:text-sm font-medium">Farmer Name</TableHead>
                           <TableHead className="whitespace-nowrap text-xs md:text-sm font-medium">Mobile Number</TableHead>
                           <TableHead className="whitespace-nowrap text-xs md:text-sm font-medium">Email</TableHead>
@@ -997,8 +1371,9 @@ export default function Reports() {
                         {farmerCollections.length > 0 ? (
                           farmerCollections
                             .slice(farmerPage * PAGE_SIZE, (farmerPage + 1) * PAGE_SIZE)
-                            .map((farmer) => (
+                            .map((farmer, index) => (
                               <TableRow key={farmer.id}>
+                                <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmerPage * PAGE_SIZE + index + 1}</TableCell>
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.name || 'N/A'}</TableCell>
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.mobile_number || 'N/A'}</TableCell>
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.email || 'N/A'}</TableCell>
@@ -1011,15 +1386,297 @@ export default function Reports() {
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.social_media || 'N/A'}</TableCell>
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.collected_by?.name || 'N/A'}</TableCell>
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{farmer.collected_by?.cadre?.name || 'N/A'}</TableCell>
-                                <TableCell className="whitespace-nowrap text-xs md:text-sm">{format(new Date(farmer.created_at), 'P')}</TableCell>
                                 <TableCell className="whitespace-nowrap text-xs md:text-sm">{format(new Date(farmer.created_at), 'p')}</TableCell>
                               </TableRow>
                             ))
                         ) : (
                           <TableRow>
-                            <TableCell colSpan={14} className="text-center">No farmer collections found for the selected criteria.</TableCell>
+                            <TableCell colSpan={15} className="text-center">No farmer collections found for the selected criteria.</TableCell>
                           </TableRow>
                         )}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="summary">
+            <Card>
+              <CardContent className="p-6 space-y-4">
+                <div className="flex flex-wrap items-center gap-4">
+                  {/* Month selector */}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                        const [year, month] = selectedMonth.split("-").map(Number)
+                        const newDate = subMonths(new Date(year, month - 1, 1), 1)
+                        setSelectedMonth(`${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, "0")}`)
+                      }}
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <div className="min-w-[150px] text-center font-medium text-lg">
+                      {(() => {
+                        const [year, month] = selectedMonth.split("-").map(Number)
+                        return format(new Date(year, month - 1, 1), "MMMM yyyy")
+                      })()}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                        const [year, month] = selectedMonth.split("-").map(Number)
+                        const newDate = addMonths(new Date(year, month - 1, 1), 1)
+                        setSelectedMonth(`${newDate.getFullYear()}-${String(newDate.getMonth() + 1).padStart(2, "0")}`)
+                      }}
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+
+                  {/* User Type Selector */}
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium">User Type:</label>
+                    <Select
+                      value={summaryUserType}
+                      onValueChange={(value: "employee" | "manager") => setSummaryUserType(value)}
+                    >
+                      <SelectTrigger className="w-[130px]">
+                        <SelectValue placeholder="Select user type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="employee">Employee</SelectItem>
+                        <SelectItem value="manager">Manager</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Manager Selector */}
+                  {summaryUserType === "manager" && (
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium">Manager:</label>
+                      <Select
+                        value={summarySelectedManagerId}
+                        onValueChange={setSummarySelectedManagerId}
+                      >
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Select manager" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Managers</SelectItem>
+                          {summaryManagersList.map(manager => (
+                            <SelectItem key={manager.id} value={manager.id}>
+                              {manager.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {/* Employee Selector for Manager user type */}
+                  {summaryUserType === "manager" && summarySelectedManagerId !== "all" && (
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium">Employee:</label>
+                      <Select
+                        value={summaryEmployeeDropdownTouched ? summarySelectedEmployeeId : ""}
+                        onValueChange={(value) => {
+                          setSummaryEmployeeDropdownTouched(true)
+                          setSummarySelectedEmployeeId(value)
+                        }}
+                      >
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Select employee" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Employees</SelectItem>
+                          {summaryEmployeesList.map(emp => (
+                            <SelectItem key={emp.id} value={emp.id}>
+                              {emp.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {/* Employee Selector for Employee user type */}
+                  {summaryUserType === "employee" && (
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium">Employee:</label>
+                      <Select
+                        value={summarySelectedEmployeeId}
+                        onValueChange={setSummarySelectedEmployeeId}
+                      >
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Select employee" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Employees</SelectItem>
+                          {summaryAllEmployeesList.map(emp => (
+                            <SelectItem key={emp.id} value={emp.id}>
+                              {emp.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  <div className="flex-grow" />
+
+                  {/* Export Button */}
+                  <Button
+                    onClick={exportSummaryToExcel}
+                    disabled={isLoading || attendanceSummaryData.length === 0}
+                    className="bg-[#228B22] hover:bg-[#1A6B1A]"
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Export Excel
+                  </Button>
+                </div>
+
+                {/* Pagination bar (Gmail style) */}
+                <div className="flex items-center justify-end gap-2">
+                  {(() => {
+                    const total = attendanceSummaryData.length
+                    const start = total === 0 ? 0 : summaryPage * PAGE_SIZE + 1
+                    const end = Math.min(total, (summaryPage + 1) * PAGE_SIZE)
+                    return (
+                      <>
+                        <span className="text-sm text-muted-foreground">{total === 0 ? '0 of 0' : `${start}-${end} of ${total}`}</span>
+                        <Button variant="outline" size="icon" onClick={() => setSummaryPage(p => Math.max(0, p - 1))} disabled={summaryPage === 0}>
+                          <ChevronLeft className="h-4 w-4" />
+                        </Button>
+                        <Button variant="outline" size="icon" onClick={() => setSummaryPage(p => p + 1)} disabled={end >= total}>
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
+                      </>
+                    )
+                  })()}
+                </div>
+
+                {/* Table */}
+                {isLoading ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2 className="h-8 w-8 animate-spin text-[#228B22]" />
+                    <span className="ml-2">Loading attendance summary...</span>
+                  </div>
+                ) : attendanceSummaryData.length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    No attendance data found for the selected criteria.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="whitespace-nowrap sticky left-0 bg-background z-10 font-medium w-[60px]">
+                            Sl. No.
+                          </TableHead>
+                          <TableHead className="whitespace-nowrap sticky left-[60px] bg-background z-10 font-medium min-w-[150px]">
+                            Employee Name
+                          </TableHead>
+                          <TableHead className="whitespace-nowrap text-sm font-medium">
+                            Email
+                          </TableHead>
+                          <TableHead className="whitespace-nowrap text-sm font-medium">
+                            Phone
+                          </TableHead>
+                          <TableHead className="whitespace-nowrap capitalize font-medium">
+                            Role
+                          </TableHead>
+                          <TableHead className="whitespace-nowrap text-sm font-medium">
+                            Cadre
+                          </TableHead>
+                          {daysInMonth.map((date) => {
+                            const d = new Date(date)
+                            return (
+                              <TableHead key={date} className="whitespace-nowrap text-center min-w-[180px] font-medium">
+                                <div>{format(d, "dd-MMM")}</div>
+                                <div className="text-xs text-muted-foreground">{format(d, "EEE")}</div>
+                              </TableHead>
+                            )
+                          })}
+                          <TableHead className="whitespace-nowrap text-center font-medium min-w-[100px]">
+                            No. of Present
+                          </TableHead>
+                          <TableHead className="whitespace-nowrap text-center font-medium min-w-[100px]">
+                            No. of Absent
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {attendanceSummaryData
+                          .slice(summaryPage * PAGE_SIZE, (summaryPage + 1) * PAGE_SIZE)
+                          .map((item, index) => {
+                            // Calculate present and absent counts
+                            const presentCount = item.dailyAttendance.filter(day => day.attendance === "Present").length
+                            const absentCount = item.dailyAttendance.filter(day => day.attendance === "Absent").length
+
+                            return (
+                              <TableRow key={item.user.id}>
+                                <TableCell className="sticky left-0 bg-background z-10 font-medium w-[60px]">
+                                  {summaryPage * PAGE_SIZE + index + 1}
+                                </TableCell>
+                              <TableCell className="sticky left-[60px] bg-background z-10 font-medium min-w-[150px]">
+                                {item.user.name}
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap text-sm">
+                                {item.user.email}
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap text-sm">
+                                {item.user.phone || "-"}
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap capitalize">
+                                {item.user.role}
+                              </TableCell>
+                              <TableCell className="whitespace-nowrap text-sm">
+                                {item.user.cadre?.name || "-"}
+                              </TableCell>
+                              {item.dailyAttendance.map((day) => (
+                                <TableCell key={day.date} className="text-center align-top">
+                                  <div className="space-y-1 text-xs md:text-sm">
+                                    {day.checkIn ? (
+                                      <div className="text-green-700">
+                                        In: {formatSummaryTime(day.checkIn)}
+                                      </div>
+                                    ) : (
+                                      <div className="text-gray-400">In: -</div>
+                                    )}
+                                    {day.checkOut ? (
+                                      <div className="text-blue-700">
+                                        Out: {formatSummaryTime(day.checkOut)}
+                                      </div>
+                                    ) : day.checkIn ? (
+                                      <div className="text-orange-600">
+                                        Out: Not Checked Out
+                                      </div>
+                                    ) : (
+                                      <div className="text-gray-400">Out: -</div>
+                                    )}
+                                    <div className={day.loginHours >= 9 ? "text-green-700" : "text-orange-600"}>
+                                      Hours: {day.loginHours.toFixed(2)}
+                                    </div>
+                                    <div className={day.attendance === "Present" ? "text-green-700 font-semibold" : "text-red-600 font-semibold"}>
+                                      {day.attendance}
+                                    </div>
+                                  </div>
+                                </TableCell>
+                              ))}
+                              <TableCell className="text-center font-semibold text-green-700 min-w-[100px]">
+                                {presentCount}
+                              </TableCell>
+                              <TableCell className="text-center font-semibold text-red-600 min-w-[100px]">
+                                {absentCount}
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
                       </TableBody>
                     </Table>
                   </div>

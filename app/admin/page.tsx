@@ -176,7 +176,7 @@ export default function AdminDashboard() {
               </Button>
             </div>
             <h2 className="text-lg font-semibold mb-2">Reports</h2>
-            <p className="text-sm text-muted-foreground">View and export attendance and farmer data reports</p>
+            <p className="text-sm text-muted-foreground">View and export attendance, attendance summary, and farmer data reports</p>
           </CardContent>
         </Card>
 
